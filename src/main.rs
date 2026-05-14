@@ -199,7 +199,9 @@ fn run(args: Args) -> i32 {
         }
     }
 
-    let _ = writer.close();
+    if let Err(e) = writer.close() {
+        error!("pipe close failed: {e}");
+    }
     exit_code
 }
 
@@ -218,14 +220,16 @@ fn execute_payload(
                 Err(e) => {
                     let msg = format!("payload parse error: {e}");
                     error!("{msg}");
-                    let _ = writer.write_final(
+                    if let Err(we) = writer.write_final(
                         task_id,
                         WriterFinalStatus::Crashed,
                         2,
                         &[],
                         msg.as_bytes(),
                         Some(&msg),
-                    );
+                    ) {
+                        error!("pipe write result_final failed: {we}");
+                    }
                     return 2;
                 }
             }
@@ -284,10 +288,14 @@ fn execute_payload(
         Ok((status, exit_code, stdout, stderr, err_msg)) => {
             // Stream stdout/stderr as chunks before writing final.
             if !stdout.is_empty() {
-                let _ = writer.write_stdout_chunks(task_id, &stdout);
+                if let Err(e) = writer.write_stdout_chunks(task_id, &stdout) {
+                    error!("pipe write stdout_chunk failed: {e}");
+                }
             }
             if !stderr.is_empty() {
-                let _ = writer.write_stderr_chunks(task_id, &stderr);
+                if let Err(e) = writer.write_stderr_chunks(task_id, &stderr) {
+                    error!("pipe write stderr_chunk failed: {e}");
+                }
             }
             let writer_status = match status {
                 PayloadFinalStatus::Completed => WriterFinalStatus::Completed,
@@ -295,14 +303,16 @@ fn execute_payload(
                 PayloadFinalStatus::Timeout => WriterFinalStatus::Timeout,
                 PayloadFinalStatus::Crashed => WriterFinalStatus::Crashed,
             };
-            let _ = writer.write_final(
+            if let Err(e) = writer.write_final(
                 task_id,
                 writer_status,
                 exit_code,
                 &stdout,
                 &stderr,
                 err_msg.as_deref(),
-            );
+            ) {
+                error!("pipe write result_final failed: {e}");
+            }
             match status {
                 PayloadFinalStatus::Completed => 0,
                 PayloadFinalStatus::Failed => 1,
@@ -313,14 +323,16 @@ fn execute_payload(
         Err(e) => {
             let msg = e.to_string();
             error!("payload execution error: {msg}");
-            let _ = writer.write_final(
+            if let Err(we) = writer.write_final(
                 task_id,
                 WriterFinalStatus::Failed,
                 1,
                 &[],
                 msg.as_bytes(),
                 Some(&msg),
-            );
+            ) {
+                error!("pipe write result_final failed: {we}");
+            }
             1
         }
     }
