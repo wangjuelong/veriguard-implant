@@ -85,7 +85,12 @@ impl Payload for NetworkTrafficPayload {
 }
 
 fn send_tcp(addr: &str, data: &[u8], timeout: Duration) -> io::Result<Vec<u8>> {
-    let mut stream = TcpStream::connect(addr)?;
+    // Parse to SocketAddr first so we can call connect_timeout, which respects
+    // the caller's --timeout flag instead of the OS default (~2 min).
+    let sock_addr: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let mut stream = TcpStream::connect_timeout(&sock_addr, timeout)?;
     stream.set_write_timeout(Some(timeout))?;
     if !data.is_empty() {
         stream.write_all(data)?;
@@ -145,5 +150,31 @@ mod tests {
         // Port 1 is almost always closed/refused.
         let result = send_tcp("127.0.0.1:1", &[], Duration::from_secs(1));
         assert!(result.is_err());
+    }
+
+    /// H1 regression: connect_timeout must return an error quickly instead of
+    /// blocking for the OS default (~2 min).
+    ///
+    /// 192.0.2.1 is TEST-NET-1 (RFC 5737) — routable but never responds.
+    /// We use a 300 ms timeout and assert the whole call finishes in < 5 s.
+    #[test]
+    #[ignore = "requires a network environment where 192.0.2.1 is unreachable (not a local loopback)"]
+    fn test_send_tcp_connect_timeout_respected() {
+        use std::time::Instant;
+        let start = Instant::now();
+        let result = send_tcp("192.0.2.1:9999", &[], Duration::from_millis(300));
+        let elapsed = start.elapsed();
+        assert!(result.is_err(), "connection to unreachable IP must fail");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "connect_timeout must return within 5 s, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn test_send_tcp_invalid_addr_returns_err() {
+        // A non-parseable address string must return Err immediately.
+        let result = send_tcp("not-an-ip:port", &[], Duration::from_secs(1));
+        assert!(result.is_err(), "invalid address must return Err");
     }
 }
