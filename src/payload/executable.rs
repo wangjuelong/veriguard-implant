@@ -124,14 +124,39 @@ mod tests {
         assert!(p.args.is_empty());
     }
 
+    /// L2 fix: call execute() with path-traversal filenames and assert
+    /// the result is FinalStatus::Failed (not a successful file write).
     #[test]
     fn test_executable_payload_rejects_path_traversal() {
-        // We call the validation logic directly by simulating the filename check.
+        use crate::payload::ExecContext;
+        use crate::result::writer::ResultWriter;
+        use tempfile::NamedTempFile;
+
         let filenames_to_reject = ["../etc/passwd", "sub/dir/file", "a\\b"];
+
         for fname in &filenames_to_reject {
-            assert!(
-                fname.contains('/') || fname.contains('\\'),
-                "Expected path separator in {fname}"
+            let payload = ExecutablePayload {
+                data_b64: STANDARD.encode(b"#!/bin/sh\necho pwned"),
+                filename: fname.to_string(),
+                args: vec![],
+            };
+
+            // Wire up a temporary file as the "pipe" so we can call execute().
+            let tmp = NamedTempFile::new().expect("temp file");
+            let mut writer =
+                ResultWriter::open_file_for_test(tmp.path()).expect("open writer");
+
+            let mut ctx = ExecContext {
+                task_id: "L2-test",
+                timeout: std::time::Duration::from_secs(5),
+                writer: &mut writer,
+            };
+
+            let result = payload.execute(&mut ctx).expect("execute returns Ok");
+            assert_eq!(
+                result.0,
+                FinalStatus::Failed,
+                "path-traversal filename {fname:?} must yield FinalStatus::Failed"
             );
         }
     }

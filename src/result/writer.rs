@@ -159,6 +159,22 @@ impl ResultWriter {
         self.writer.flush()
     }
 
+    /// Create a `ResultWriter` backed by a regular file for use in tests.
+    ///
+    /// Do not call from production code.
+    #[cfg(test)]
+    pub fn open_file_for_test(path: impl AsRef<std::path::Path>) -> io::Result<Self> {
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
+        Ok(Self {
+            writer: BufWriter::new(file),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+        })
+    }
+
     // -- private helpers --
 
     fn write_line(&mut self, line: &str) -> io::Result<()> {
