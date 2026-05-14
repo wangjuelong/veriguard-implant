@@ -251,6 +251,50 @@ fn test_cli_dns_resolution() {
     assert_eq!(final_ev["status"], "completed");
 }
 
+/// H2 regression: result_final.stderr_b64 must decode to the child's stderr.
+#[test]
+#[cfg(unix)]
+fn test_cli_command_stderr_captured_in_result_final() {
+    let dir = tempdir().unwrap();
+    let pipe = make_result_file(dir.path(), "pipe_h2.ndjson");
+    // Command writes "err_marker" to stderr only.
+    let cmd_json = serde_json::json!({
+        "executor": "sh",
+        "content": STANDARD.encode("echo err_marker 1>&2")
+    });
+    let payload_b64 = STANDARD.encode(cmd_json.to_string());
+
+    Command::new(binary())
+        .args([
+            "--task-id",
+            "IT-H2",
+            "--payload-type",
+            "Command",
+            "--payload-b64",
+            &payload_b64,
+            "--result-pipe",
+            pipe.to_str().unwrap(),
+            "--timeout",
+            "10s",
+        ])
+        .status()
+        .expect("binary should run");
+
+    let events = read_ndjson(&pipe);
+    let final_ev = events
+        .iter()
+        .find(|e| e["event_type"] == "result_final")
+        .expect("result_final must be present");
+
+    let stderr_b64 = final_ev["stderr_b64"].as_str().expect("stderr_b64 field");
+    let stderr_bytes = STANDARD.decode(stderr_b64).expect("valid base64");
+    let stderr_str = String::from_utf8_lossy(&stderr_bytes);
+    assert!(
+        stderr_str.contains("err_marker"),
+        "stderr_b64 must decode to the child's stderr output, got: {stderr_str:?}"
+    );
+}
+
 #[test]
 #[cfg(unix)]
 fn test_result_final_is_last_event() {

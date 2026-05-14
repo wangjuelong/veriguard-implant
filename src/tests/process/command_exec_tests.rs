@@ -71,6 +71,31 @@ fn test_decode_command_invalid_utf8_returns_err() {
     );
 }
 
+// -- H2: stderr piped --
+
+/// Verify that stderr written by a child process is captured in
+/// ExecutionResult.stderr (not leaked to the parent) and therefore available
+/// for result_final.stderr_b64.
+#[test]
+#[cfg(unix)]
+fn test_invoke_command_captures_stderr() {
+    use crate::common::constants::EXECUTOR_SH;
+
+    // "echo err 1>&2" writes "err\n" to stderr and nothing to stdout.
+    let result = invoke_command(EXECUTOR_SH, "echo err 1>&2", &["-c"], false)
+        .expect("invoke_command must succeed");
+
+    assert!(
+        result.stderr.contains("err"),
+        "stderr must be captured, got: {:?}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.is_empty() || !result.stdout.contains("err"),
+        "err must not appear in stdout"
+    );
+}
+
 // -- INVOKE_COMMAND --
 
 #[ignore]

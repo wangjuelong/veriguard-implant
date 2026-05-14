@@ -29,6 +29,9 @@ pub fn invoke_command(
         _ => command.args(args).arg(cmd_expression),
     }
     .stdout(Stdio::piped())
+    // Pipe stderr so it is captured in ExecutionResult.stderr instead of
+    // leaking to the parent process and leaving result_final.stderr_b64 empty.
+    .stderr(Stdio::piped())
     .output();
 
     match result {
