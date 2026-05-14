@@ -37,12 +37,23 @@ pub fn invoke_command(
     }
 }
 
-pub fn decode_command(encoded_command: &str) -> String {
-    let decoded_bytes = STANDARD
+/// Decode a base64-encoded command string and apply `#{location}` substitution.
+///
+/// # Errors
+///
+/// Returns `Err(Error::Internal(...))` when:
+/// - `encoded_command` is not valid standard base64, or
+/// - the decoded bytes are not valid UTF-8.
+///
+/// Callers must **not** `unwrap()` this result on the hot path; propagate the
+/// error so the process exits with code 2 per spec §3.3.2.
+pub fn decode_command(encoded_command: &str) -> Result<String, Error> {
+    let bytes = STANDARD
         .decode(encoded_command)
-        .expect("Failed to decode Base64 command");
-    let decoded = String::from_utf8(decoded_bytes).expect("Decoded command is not valid UTF-8");
-    compute_command(&decoded)
+        .map_err(|e| Error::Internal(format!("base64 decode: {e}")))?;
+    let s = String::from_utf8(bytes)
+        .map_err(|e| Error::Internal(format!("non-UTF-8 command: {e}")))?;
+    Ok(compute_command(&s))
 }
 
 pub fn format_powershell_command(command: String) -> String {
@@ -102,7 +113,7 @@ pub fn command_execution(
     pre_check: bool,
 ) -> Result<ExecutionResult, Error> {
     let final_executor = get_executor(executor);
-    let mut formatted_cmd = decode_command(command);
+    let mut formatted_cmd = decode_command(command)?;
     let mut args: Vec<&str> = vec!["-c"];
 
     if !is_executor_present(final_executor) {
