@@ -251,6 +251,43 @@ fn test_cli_dns_resolution() {
     assert_eq!(final_ev["status"], "completed");
 }
 
+/// H3 regression: --payload-b64 larger than MAX_PAYLOAD_B64_BYTES must exit 2.
+///
+/// macOS ARG_MAX = 1 MiB so we cannot pass 32 MiB on the CLI.
+/// The actual MAX_PAYLOAD_B64_BYTES guard is unit-tested in main.rs (#[cfg(test)]).
+/// Here we exercise the early-exit-2 code path via a payload that is valid
+/// base64 but decodes to non-JSON, so the binary exits 2 via parse error.
+#[test]
+#[cfg(unix)]
+fn test_cli_payload_not_json_exits_2() {
+    let dir = tempdir().unwrap();
+    let pipe = make_result_file(dir.path(), "pipe_h3.ndjson");
+    // 'A' repeated encodes to all-zero bytes — valid base64, invalid JSON.
+    let not_json_b64 = STANDARD.encode("A".repeat(1024));
+
+    let status = Command::new(binary())
+        .args([
+            "--task-id",
+            "IT-H3",
+            "--payload-type",
+            "Command",
+            "--payload-b64",
+            &not_json_b64,
+            "--result-pipe",
+            pipe.to_str().unwrap(),
+            "--timeout",
+            "10s",
+        ])
+        .status()
+        .expect("binary should run");
+
+    assert_eq!(
+        status.code(),
+        Some(2),
+        "payload that decodes to non-JSON must exit 2"
+    );
+}
+
 /// H2 regression: result_final.stderr_b64 must decode to the child's stderr.
 #[test]
 #[cfg(unix)]

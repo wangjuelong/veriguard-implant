@@ -59,6 +59,12 @@ mod tests;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Maximum accepted byte length for the `--payload-b64` argument (32 MiB).
+///
+/// A payload larger than this is almost certainly a bug or DoS attempt; reject
+/// it early before allocating memory for decoding.
+pub(crate) const MAX_PAYLOAD_B64_BYTES: usize = 32 * 1024 * 1024;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "veriguard-implant",
@@ -130,6 +136,28 @@ fn run(args: Args) -> i32 {
             return 2;
         }
     };
+
+    // Guard against oversized payloads (DoS / memory exhaustion).
+    if args.payload_b64.len() > MAX_PAYLOAD_B64_BYTES {
+        error!(
+            "--payload-b64 exceeds max size ({} bytes, limit {} bytes)",
+            args.payload_b64.len(),
+            MAX_PAYLOAD_B64_BYTES
+        );
+        // Open writer only if possible; best-effort result_final before exit 2.
+        if let Ok(mut writer) = ResultWriter::open(&args.result_pipe) {
+            let msg = "payload too large";
+            let _ = writer.write_final(
+                &args.task_id,
+                WriterFinalStatus::Failed,
+                2,
+                &[],
+                msg.as_bytes(),
+                Some(msg),
+            );
+        }
+        return 2;
+    }
 
     // Decode payload spec JSON.
     let payload_json = match STANDARD.decode(&args.payload_b64) {
@@ -297,3 +325,4 @@ fn execute_payload(
         }
     }
 }
+
