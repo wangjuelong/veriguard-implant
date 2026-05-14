@@ -4,7 +4,6 @@
 /// integration test.  These tests verify the guard constant and the comparison
 /// predicate directly.  The exit-2 code path reachability is covered by
 /// `tests/integration.rs::test_cli_payload_not_json_exits_2`.
-
 // Bring the constant into scope from the crate root.
 use crate::MAX_PAYLOAD_B64_BYTES;
 

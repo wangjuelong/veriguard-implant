@@ -143,8 +143,7 @@ mod tests {
 
             // Wire up a temporary file as the "pipe" so we can call execute().
             let tmp = NamedTempFile::new().expect("temp file");
-            let mut writer =
-                ResultWriter::open_file_for_test(tmp.path()).expect("open writer");
+            let mut writer = ResultWriter::open_file_for_test(tmp.path()).expect("open writer");
 
             let mut ctx = ExecContext {
                 task_id: "L2-test",

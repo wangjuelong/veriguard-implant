@@ -44,7 +44,10 @@ fn test_decode_command_valid_base64_utf8() {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let encoded = STANDARD.encode("echo hello");
     let result = decode_command(&encoded);
-    assert!(result.is_ok(), "valid base64+UTF-8 should decode successfully");
+    assert!(
+        result.is_ok(),
+        "valid base64+UTF-8 should decode successfully"
+    );
     // The result may have #{location} substituted; the core "echo hello" text is present.
     assert!(result.unwrap().contains("echo hello"));
 }
@@ -53,10 +56,7 @@ fn test_decode_command_valid_base64_utf8() {
 fn test_decode_command_invalid_base64_returns_err() {
     // "!!!" is not valid base64 — must return Err, never panic.
     let result = decode_command("!!!not-base64!!!");
-    assert!(
-        result.is_err(),
-        "invalid base64 must return Err, not panic"
-    );
+    assert!(result.is_err(), "invalid base64 must return Err, not panic");
 }
 
 #[test]

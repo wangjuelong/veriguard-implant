@@ -54,8 +54,8 @@ pub fn decode_command(encoded_command: &str) -> Result<String, Error> {
     let bytes = STANDARD
         .decode(encoded_command)
         .map_err(|e| Error::Internal(format!("base64 decode: {e}")))?;
-    let s = String::from_utf8(bytes)
-        .map_err(|e| Error::Internal(format!("non-UTF-8 command: {e}")))?;
+    let s =
+        String::from_utf8(bytes).map_err(|e| Error::Internal(format!("non-UTF-8 command: {e}")))?;
     Ok(compute_command(&s))
 }
 
