@@ -99,14 +99,26 @@ fn send_tcp(addr: &str, data: &[u8], timeout: Duration) -> io::Result<Vec<u8>> {
 }
 
 fn send_udp(addr: &str, data: &[u8], timeout: Duration) -> io::Result<Vec<u8>> {
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    // Parse first so we can choose the matching local bind address family.
+    let sock_addr: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    // Bind to the unspecified address of the same family as the target.
+    // Binding an IPv4 socket and then send_to-ing an IPv6 address fails with
+    // "address family not supported" on most platforms.
+    let local_addr = if sock_addr.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    };
+    let socket = UdpSocket::bind(local_addr)?;
     socket.set_write_timeout(Some(timeout))?;
     let send_data = if data.is_empty() {
         b"\x00" as &[u8]
     } else {
         data
     };
-    socket.send_to(send_data, addr)?;
+    socket.send_to(send_data, sock_addr)?;
     Ok(format!("UDP packet sent to {addr}").into_bytes())
 }
 
@@ -175,6 +187,46 @@ mod tests {
     fn test_send_tcp_invalid_addr_returns_err() {
         // A non-parseable address string must return Err immediately.
         let result = send_tcp("not-an-ip:port", &[], Duration::from_secs(1));
+        assert!(result.is_err(), "invalid address must return Err");
+    }
+
+    /// M4: send_udp with an IPv4 target must bind 0.0.0.0:0 (not fail on
+    /// address-family mismatch).  We expect a send error (port closed), not a
+    /// bind error.
+    #[test]
+    fn test_send_udp_ipv4_binds_correctly() {
+        // Port 1 is almost always closed; UDP send_to itself succeeds (fire-and-forget).
+        // The important thing is that bind("0.0.0.0:0") succeeds for an IPv4 target.
+        let result = send_udp("127.0.0.1:1", &[], Duration::from_secs(1));
+        // UDP send is fire-and-forget; it may succeed (no ICMP reply on loopback).
+        // We only assert it does NOT fail with a bind error.
+        match &result {
+            Err(e) => assert!(
+                e.kind() != std::io::ErrorKind::AddrNotAvailable,
+                "IPv4 UDP must not fail with AddrNotAvailable: {e}"
+            ),
+            Ok(_) => {}
+        }
+    }
+
+    /// M4: send_udp with an IPv6 loopback target must bind [::]:0, not
+    /// 0.0.0.0:0 (which would fail with address family mismatch on most OSes).
+    #[test]
+    fn test_send_udp_ipv6_binds_correctly() {
+        // ::1 is the IPv6 loopback — available on all platforms with IPv6.
+        let result = send_udp("[::1]:1", &[], Duration::from_secs(1));
+        match &result {
+            Err(e) => assert!(
+                e.kind() != std::io::ErrorKind::AddrNotAvailable,
+                "IPv6 UDP must not fail with AddrNotAvailable: {e}"
+            ),
+            Ok(_) => {}
+        }
+    }
+
+    #[test]
+    fn test_send_udp_invalid_addr_returns_err() {
+        let result = send_udp("not-an-addr", &[], Duration::from_secs(1));
         assert!(result.is_err(), "invalid address must return Err");
     }
 }
