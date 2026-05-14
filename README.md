@@ -1,143 +1,41 @@
-# OpenAEV Implant
+# veriguard-implant
 
-[![Website](https://img.shields.io/badge/website-openaev.io-blue.svg)](https://openaev.io)
-[![CircleCI](https://circleci.com/gh/OpenAEV-Platform/implant.svg?style=shield)](https://circleci.com/gh/OpenAEV-Platform/implant/tree/main)
-[![GitHub release](https://img.shields.io/github/release/OpenAEV-Platform/implant.svg)](https://github.com/OpenAEV-Platform/implant/releases/latest)
-[![Slack Status](https://img.shields.io/badge/slack-3K%2B%20members-4A154B)](https://community.filigran.io)
+**Veriguard 平台对手模拟植入物（implant）**——府谷电力 IPv6 安全验证系统招标 §5.1 主机攻击场景的可检测对象本体。
 
-The following repository is used to store the OpenAEV implant for the platform. For performance and low level access, the agent is written in Rust. Please start your journey with https://doc.rust-lang.org/book.
+## Upstream attribution
 
----
+Forked from [OpenAEV-Platform/implant](https://github.com/OpenAEV-Platform/implant) at commit `3b16615e95d0f9187328a73fbe26c5fd38e3b18a` (release 2.3.5).
 
-## 🚀 Installation
+**Fork 后一次性脱钩**：两仓代码完全独立演化，不跟上游 patch / 不做 cherry-pick / 不强求协议兼容。上游归属仅作 LICENSE Apache 2.0 attribution 用途。
 
-There is **no direct installation** required for the implant.
+## Role
 
-Instead, it is executed by a neutral orchestrator such as:
+`veriguard-implant` 是**短命一次性二进制**，由 `veriguard-agent` 按需 drop + 启动，承载招标 §5.1 12 类主机攻击的 5 类 payload：
 
-- **OpenAEV Agent**
-- **Tanium**
-- **Caldera**
-- Or any other compatible execution engine
+- **Command** — shell 命令执行（含 ART 1781 条主机用例）
+- **Executable** — drop + 执行已知二进制（RAT / 提权工具 / 病毒样本）
+- **FileDrop** — 落盘文件 + 权限设置（webshell / 病毒样本）
+- **DnsResolution** — DNS A/AAAA/MX 查询
+- **NetworkTraffic** — 自定义 TCP/UDP/ICMP 包发送
 
-Execution is fully managed by the orchestrator via OpenAEV scenarios.
+在主机内表现为可被 HIDS（甲方"云眼"）/ EDR 检测的"对手行为"——这是设计意图，不是缺陷。
 
----
+## Project context
 
-## 🛠 Development
+详细设计见 `wangjuelong/Veriguard` 主仓：
+- Spec: `docs/superpowers/specs/2026-05-14-veriguard-agent-implant-fork-c1-c2-design.md`
+- Agent ↔ Implant 调用契约：§3.3.2
+- Result Pipe NDJSON 行格式：§3.3.3
 
-This project is written in [Rust](https://rust-lang.org/). If you're new to Rust, we recommend starting
-with [The Rust Book](https://doc.rust-lang.org/book).
-
-### Prerequisites
-
-- [Rust](https://rustup.rs/)
-- [Cargo](https://doc.rust-lang.org/cargo/)
-- Linux, macOS, or Windows
-
-### Build
-
-To build the implant locally:
+## Build
 
 ```bash
-cargo build
+cargo build --release
+cargo zigbuild --target x86_64-unknown-linux-gnu --release   # cross-compile
 ```
 
----
+CI: `.github/workflows/release.yml` (matrix 6 binary: Linux/Win/macOS × x86_64/arm64)
 
-## ✅ Running Tests
+## License
 
-Run all tests:
-
-```bash
-cargo test
-```
-
-Run a specific test:
-
-```bash
-cargo test test_name
-```
-
----
-
-## 📊 Code Coverage
-
-You can generate coverage reports using [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov):
-
-```bash
-cargo install cargo-llvm-cov
-cargo llvm-cov --html
-```
-
----
-
-## 🧹 Code Quality
-
-### 🧠 Clippy – Linting
-
-```bash
-cargo clippy -- -D warnings
-```
-
-Auto-fix warnings:
-
-```bash
-cargo fix --clippy
-```
-
-Clippy runs in CI and must pass.
-
----
-
-### 🎨 Rustfmt – Formatting
-
-Check formatting:
-
-```bash
-cargo fmt -- --check
-```
-
-Auto-format:
-
-```bash
-cargo fmt
-```
-
-Rustfmt also runs in CI.
-
----
-
-### 🔒 Cargo Audit – Vulnerabilities
-
-Check for known issues in dependencies:
-
-```bash
-cargo audit
-```
-
-Fix with:
-
-```bash
-cargo update
-```
-
----
-
-## 🐞 Troubleshooting in Development Mode
-
-When running the implant locally (e.g., using `cargo run`), logs are written to:
-
-```
-target/debug/openaev-implant.log
-```
-
-Check this file to investigate errors or debug behavior during development.
-
----
-
-## 🧬 About
-
-OpenAEV is developed by [Filigran](https://filigran.io), a company building open-source security tooling.
-
-<a href="https://filigran.io" alt="Filigran"><img src="https://github.com/OpenCTI-Platform/opencti/raw/master/.github/img/logo_filigran.png" width="300" /></a>
+Apache 2.0 (inherited from upstream OpenAEV-Platform/implant).
