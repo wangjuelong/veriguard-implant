@@ -1,7 +1,9 @@
 [package]
-name = "openaev-implant"
-version = "2.3.5"
+name = "veriguard-implant"
+version = "0.1.0"
 edition = "2021"
+description = "Veriguard 对手模拟 implant (forked from OpenAEV-Platform/implant@3b16615e9)"
+license = "Apache-2.0"
 
 
 [dependencies]
