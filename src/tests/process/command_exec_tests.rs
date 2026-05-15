@@ -8,7 +8,7 @@ use crate::common::constants::{STATUS_COMMAND_NOT_FOUND, STATUS_SUCCESS, STATUS_
 use crate::common::execution_result::decode_output;
 #[cfg(windows)]
 use crate::process::command_exec::format_powershell_command;
-use crate::process::command_exec::invoke_command;
+use crate::process::command_exec::{decode_command, invoke_command};
 
 // -- DECODE_OUTPUT --
 
@@ -35,6 +35,65 @@ fn test_decode_output_with_wrong_character() {
     let output = vec![72, 101, 108, 108, 111, 130];
     let decoded_output = decode_output(&output);
     assert_eq!(decoded_output, "Hello�");
+}
+
+// -- DECODE_COMMAND --
+
+#[test]
+fn test_decode_command_valid_base64_utf8() {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let encoded = STANDARD.encode("echo hello");
+    let result = decode_command(&encoded);
+    assert!(
+        result.is_ok(),
+        "valid base64+UTF-8 should decode successfully"
+    );
+    // The result may have #{location} substituted; the core "echo hello" text is present.
+    assert!(result.unwrap().contains("echo hello"));
+}
+
+#[test]
+fn test_decode_command_invalid_base64_returns_err() {
+    // "!!!" is not valid base64 — must return Err, never panic.
+    let result = decode_command("!!!not-base64!!!");
+    assert!(result.is_err(), "invalid base64 must return Err, not panic");
+}
+
+#[test]
+fn test_decode_command_invalid_utf8_returns_err() {
+    // Encode raw bytes that are valid base64 but not valid UTF-8 (0xFF, 0xFE).
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let non_utf8 = STANDARD.encode([0xFF_u8, 0xFE, 0x00]);
+    let result = decode_command(&non_utf8);
+    assert!(
+        result.is_err(),
+        "non-UTF-8 payload must return Err, not panic"
+    );
+}
+
+// -- H2: stderr piped --
+
+/// Verify that stderr written by a child process is captured in
+/// ExecutionResult.stderr (not leaked to the parent) and therefore available
+/// for result_final.stderr_b64.
+#[test]
+#[cfg(unix)]
+fn test_invoke_command_captures_stderr() {
+    use crate::common::constants::EXECUTOR_SH;
+
+    // "echo err 1>&2" writes "err\n" to stderr and nothing to stdout.
+    let result = invoke_command(EXECUTOR_SH, "echo err 1>&2", &["-c"], false)
+        .expect("invoke_command must succeed");
+
+    assert!(
+        result.stderr.contains("err"),
+        "stderr must be captured, got: {:?}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.is_empty() || !result.stdout.contains("err"),
+        "err must not appear in stdout"
+    );
 }
 
 // -- INVOKE_COMMAND --
