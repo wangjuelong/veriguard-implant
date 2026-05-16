@@ -1,7 +1,8 @@
-//! `NetworkTraffic` payload: send TCP/UDP probe traffic to a target.
+//! `NetworkTraffic` payload: send TCP/UDP probe traffic to one or more targets.
 //!
 //! # JSON spec (`--payload-b64` decoded)
 //!
+//! Single tuple (backward compatible):
 //! ```json
 //! {
 //!   "protocol": "tcp",            // "tcp" | "udp"
@@ -11,6 +12,24 @@
 //!   "timeout_secs": 5             // optional per-connection timeout
 //! }
 //! ```
+//!
+//! Multi-tuple (IPv6 安全验证系统 §4.4 "同一流量验证用例中包含多个端口不同的四元组"):
+//! ```json
+//! {
+//!   "protocol": "tcp",
+//!   "target": "2001:db8::2",
+//!   "port": 443,
+//!   "timeout_secs": 5,
+//!   "extra_tuples": [
+//!     { "protocol": "tcp", "target": "2001:db8::2", "port": 8080 },
+//!     { "protocol": "udp", "target": "2001:db8::4", "port": 53,
+//!       "data_b64": "..." }
+//!   ]
+//! }
+//! ```
+//!
+//! `extra_tuples` 的每个元素都按主元组同样的逻辑发送一次；`timeout_secs` 全局共用主元组的设置。
+//! 任一 tuple 失败即整体 Failed（stderr 拼接每个失败 tuple 的错误信息）；全部成功 Completed。
 
 use crate::common::error_model::Error;
 use crate::payload::{ExecContext, FinalStatus, Payload, PayloadResult};
@@ -21,11 +40,24 @@ use std::net::{TcpStream, UdpSocket};
 use std::time::Duration;
 
 /// Protocol selection for the network probe.
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum NetProtocol {
     Tcp,
     Udp,
+}
+
+/// One (protocol, target, port[, data_b64]) tuple. Used both for the primary
+/// connection (flat fields on [`NetworkTrafficPayload`]) and as the element
+/// type of the `extra_tuples` list (招标 §4.4 多端口四元组).
+#[derive(Debug, Deserialize, Clone)]
+pub struct NetworkTrafficTuple {
+    pub protocol: NetProtocol,
+    pub target: String,
+    pub port: u16,
+    /// Optional data to send (base64-encoded).
+    #[serde(default)]
+    pub data_b64: Option<String>,
 }
 
 /// Deserialised from `--payload-b64`.
@@ -40,6 +72,10 @@ pub struct NetworkTrafficPayload {
     /// Per-connection timeout in seconds (default 5).
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+    /// Additional tuples to probe in the same invocation (§4.4). Empty / absent
+    /// means single-tuple legacy behaviour.
+    #[serde(default)]
+    pub extra_tuples: Vec<NetworkTrafficTuple>,
 }
 
 fn default_timeout_secs() -> u64 {
@@ -48,38 +84,81 @@ fn default_timeout_secs() -> u64 {
 
 impl Payload for NetworkTrafficPayload {
     fn execute(&self, ctx: &mut ExecContext<'_>) -> PayloadResult {
-        let addr = format!("{}:{}", self.target, self.port);
         let timeout = Duration::from_secs(self.timeout_secs);
 
-        ctx.writer
-            .write_progress(
-                ctx.task_id,
-                "connecting",
-                Some(&format!("sending {:?} traffic to {addr}", self.protocol)),
-            )
-            .map_err(|e| Error::Internal(e.to_string()))?;
+        // Iterate primary tuple first, then each extra tuple. Each tuple
+        // contributes its progress event + stdout line. Failure of any tuple
+        // marks overall result as Failed but still attempts the remaining ones.
+        let tuples = std::iter::once(NetworkTrafficTuple {
+            protocol: self.protocol,
+            target: self.target.clone(),
+            port: self.port,
+            data_b64: self.data_b64.clone(),
+        })
+        .chain(self.extra_tuples.iter().cloned());
 
-        let data = match &self.data_b64 {
-            Some(b64) => STANDARD
-                .decode(b64)
-                .map_err(|e| Error::Internal(format!("base64 decode error: {e}")))?,
-            None => vec![],
-        };
+        let mut stdout_acc: Vec<u8> = Vec::new();
+        let mut stderr_acc: Vec<u8> = Vec::new();
+        let mut any_failed = false;
+        let mut last_err_summary: Option<String> = None;
 
-        let result = match self.protocol {
-            NetProtocol::Tcp => send_tcp(&addr, &data, timeout),
-            NetProtocol::Udp => send_udp(&addr, &data, timeout),
-        };
+        for (idx, tuple) in tuples.enumerate() {
+            let addr = format!("{}:{}", tuple.target, tuple.port);
+            let role = if idx == 0 {
+                "primary".to_string()
+            } else {
+                format!("extra[{}]", idx - 1)
+            };
 
-        match result {
-            Ok(stdout) => Ok((FinalStatus::Completed, 0, stdout, vec![], None)),
-            Err(e) => Ok((
+            ctx.writer
+                .write_progress(
+                    ctx.task_id,
+                    "connecting",
+                    Some(&format!(
+                        "sending {:?} traffic to {addr} ({role})",
+                        tuple.protocol
+                    )),
+                )
+                .map_err(|e| Error::Internal(e.to_string()))?;
+
+            let data = match &tuple.data_b64 {
+                Some(b64) => STANDARD
+                    .decode(b64)
+                    .map_err(|e| Error::Internal(format!("base64 decode error: {e}")))?,
+                None => vec![],
+            };
+
+            let result = match tuple.protocol {
+                NetProtocol::Tcp => send_tcp(&addr, &data, timeout),
+                NetProtocol::Udp => send_udp(&addr, &data, timeout),
+            };
+
+            match result {
+                Ok(line) => {
+                    stdout_acc.extend_from_slice(format!("[{role}] ").as_bytes());
+                    stdout_acc.extend_from_slice(&line);
+                    stdout_acc.push(b'\n');
+                }
+                Err(e) => {
+                    any_failed = true;
+                    let err_line = format!("[{role}] {addr}: {e}");
+                    stderr_acc.extend_from_slice(err_line.as_bytes());
+                    stderr_acc.push(b'\n');
+                    last_err_summary = Some(format!("{role} {addr}: network error"));
+                }
+            }
+        }
+
+        if any_failed {
+            Ok((
                 FinalStatus::Failed,
                 1,
-                vec![],
-                e.to_string().into_bytes(),
-                Some("network error".to_string()),
-            )),
+                stdout_acc,
+                stderr_acc,
+                last_err_summary.or_else(|| Some("network error".to_string())),
+            ))
+        } else {
+            Ok((FinalStatus::Completed, 0, stdout_acc, stderr_acc, None))
         }
     }
 }
@@ -134,6 +213,7 @@ mod tests {
         assert_eq!(p.port, 9999);
         assert_eq!(p.timeout_secs, 5); // default
         assert!(p.data_b64.is_none());
+        assert!(p.extra_tuples.is_empty()); // default: single-tuple legacy
     }
 
     #[test]
@@ -143,6 +223,7 @@ mod tests {
         assert_eq!(p.protocol, NetProtocol::Udp);
         assert_eq!(p.timeout_secs, 3);
         assert!(p.data_b64.is_some());
+        assert!(p.extra_tuples.is_empty());
     }
 
     #[test]
@@ -228,5 +309,47 @@ mod tests {
     fn test_send_udp_invalid_addr_returns_err() {
         let result = send_udp("not-an-addr", &[], Duration::from_secs(1));
         assert!(result.is_err(), "invalid address must return Err");
+    }
+
+    // ===== §4.4 multi-tuple tests =====
+
+    /// 反序列化携带 extra_tuples 的 JSON —— 招标 §4.4 wire 形态由 platform StatusPayload 透传.
+    #[test]
+    fn test_deserialize_with_extra_tuples() {
+        let json = r#"{
+            "protocol": "tcp",
+            "target": "2001:db8::2",
+            "port": 443,
+            "extra_tuples": [
+                {"protocol": "tcp", "target": "2001:db8::2", "port": 8080},
+                {"protocol": "udp", "target": "2001:db8::4", "port": 53, "data_b64": "AAAA"}
+            ]
+        }"#;
+        let p: NetworkTrafficPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(p.target, "2001:db8::2");
+        assert_eq!(p.port, 443);
+        assert_eq!(p.extra_tuples.len(), 2);
+        assert_eq!(p.extra_tuples[0].port, 8080);
+        assert_eq!(p.extra_tuples[1].protocol, NetProtocol::Udp);
+        assert!(p.extra_tuples[1].data_b64.is_some());
+    }
+
+    /// 旧版 JSON (无 extra_tuples key) 反序列化仍可工作 —— 向后兼容保证.
+    #[test]
+    fn test_deserialize_legacy_without_extra_tuples_field() {
+        let json = r#"{"protocol":"tcp","target":"10.0.0.1","port":80}"#;
+        let p: NetworkTrafficPayload = serde_json::from_str(json).unwrap();
+        assert!(
+            p.extra_tuples.is_empty(),
+            "missing extra_tuples key must default to empty list, not panic"
+        );
+    }
+
+    /// extra_tuples 显式为空数组 —— 也走单 tuple 路径.
+    #[test]
+    fn test_deserialize_extra_tuples_empty_array() {
+        let json = r#"{"protocol":"tcp","target":"10.0.0.1","port":80,"extra_tuples":[]}"#;
+        let p: NetworkTrafficPayload = serde_json::from_str(json).unwrap();
+        assert!(p.extra_tuples.is_empty());
     }
 }
